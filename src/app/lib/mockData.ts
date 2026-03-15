@@ -28,6 +28,14 @@ export interface User {
   isPendingApproval?: boolean;
 }
 
+export interface RescheduleProposal {
+  newDate: string;
+  newTimeSlot: string;
+  reason: string;
+  proposedAt: string;
+  proposedBy: 'counselor' | 'student'; // who initiated this reschedule
+}
+
 export interface Appointment {
   id: string;
   studentId: string;
@@ -37,14 +45,20 @@ export interface Appointment {
   counselorEmail?: string;
   date: string;
   timeSlot: string;
-  status: 'pending' | 'confirmed' | 'completed' | 'cancelled';
+  status:
+    | 'pending'
+    | 'confirmed'
+    | 'completed'
+    | 'reschedule_proposed'   // counselor proposed a new time → waiting on student
+    | 'reschedule_requested'  // student requested a new time → waiting on counselor
+    | 'rescheduled';          // both agreed on a new time
   program: string;
   purpose?: string;
   sessionType?: 'Personal' | 'Academic' | 'Career' | 'Others';
   reason?: string;
   notes?: string;
   narrativeSummary?: string;
-  cancellationReason?: string;
+  rescheduleProposal?: RescheduleProposal | null;
   createdAt?: string;
 }
 
@@ -69,7 +83,6 @@ export interface SystemReport {
 
 // Mock users
 export const mockUsers: User[] = [
-  // Super Admin - email starts with 'a'
   {
     id: 'SA001',
     role: 'superadmin',
@@ -80,7 +93,6 @@ export const mockUsers: User[] = [
     contactNumber: '09171234567',
     username: 'amsantos',
   },
-  // Admin - email starts with 'a'
   {
     id: 'A001',
     role: 'admin',
@@ -91,7 +103,6 @@ export const mockUsers: User[] = [
     contactNumber: '09181234567',
     username: 'aranya',
   },
-  // Counselors - emails start with 'c'
   {
     id: 'CHE001',
     role: 'counselor',
@@ -102,7 +113,10 @@ export const mockUsers: User[] = [
     contactNumber: '09191234567',
     username: 'cche',
     isAvailable: true,
-    assignedPrograms: ['Bachelor of Science in Architecture', 'Bachelor of Science in Chemical Engineering'],
+    assignedPrograms: [
+      'Bachelor of Science in Architecture',
+      'Bachelor of Science in Chemical Engineering',
+    ],
   },
   {
     id: 'MON001',
@@ -131,7 +145,7 @@ export const mockUsers: User[] = [
       'Bachelor of Science in Computer Science',
       'Bachelor of Science in Data Science and Analytics',
       'Bachelor of Science in Entertainment and Multimedia Computing',
-      'Bachelor of Science in Information Technology'
+      'Bachelor of Science in Information Technology',
     ],
   },
   {
@@ -154,7 +168,7 @@ export const mockUsers: User[] = [
       'Bachelor of Arts in English Language',
       'Bachelor of Arts in Political Science',
       'Bachelor of Science in Industrial Engineering',
-      'Bachelor of Science in Electrical Engineering'
+      'Bachelor of Science in Electrical Engineering',
     ],
   },
   {
@@ -167,9 +181,11 @@ export const mockUsers: User[] = [
     contactNumber: '09231234567',
     username: 'crosh',
     isAvailable: true,
-    assignedPrograms: ['Bachelor of Science in Electronics Engineering', 'Bachelor of Science in Computer Engineering'],
+    assignedPrograms: [
+      'Bachelor of Science in Electronics Engineering',
+      'Bachelor of Science in Computer Engineering',
+    ],
   },
-  // Students - emails start with 's'
   {
     id: 'S2024001',
     role: 'student',
@@ -214,10 +230,8 @@ export const mockUsers: User[] = [
   },
 ];
 
-// Mock appointments
 export const mockAppointments: Appointment[] = [];
 
-// Available time slots
 export const timeSlots = [
   '08:00 AM - 09:00 AM',
   '09:00 AM - 10:00 AM',
@@ -229,7 +243,20 @@ export const timeSlots = [
   '04:00 PM - 05:00 PM',
 ];
 
-// Helper functions
+// ── Helper: save updated appointment to localStorage ──
+export const updateAppointmentInStorage = (
+  appointmentId: string,
+  changes: Partial<Appointment>
+): void => {
+  const stored: Appointment[] = JSON.parse(
+    localStorage.getItem('appointments') || '[]'
+  );
+  const updated = stored.map((a) =>
+    a.id === appointmentId ? { ...a, ...changes } : a
+  );
+  localStorage.setItem('appointments', JSON.stringify(updated));
+};
+
 export const findUserByCredentials = (
   identifier: string,
   password: string,
@@ -269,46 +296,47 @@ export const getCounselorsByProgram = (program: string): User[] => {
 };
 
 export const getAvailableCounselors = (): User[] => {
-  return mockUsers.filter(
-    (user) => user.role === 'counselor' && user.isAvailable
-  );
+  return mockUsers.filter((user) => user.role === 'counselor' && user.isAvailable);
 };
 
 export const getAppointmentsByStudent = (studentId: string): Appointment[] => {
-  const storedAppointments = JSON.parse(localStorage.getItem('appointments') || '[]');
-  const storedStudentAppointments = storedAppointments.filter((apt: Appointment) => apt.studentId === studentId);
-  const mockStudentAppointments = mockAppointments.filter((apt) => apt.studentId === studentId);
-  const allAppointments = [...storedStudentAppointments, ...mockStudentAppointments];
-  const uniqueAppointments = allAppointments.filter((apt, index, self) =>
-    index === self.findIndex((a) => a.id === apt.id)
+  const stored: Appointment[] = JSON.parse(
+    localStorage.getItem('appointments') || '[]'
   );
-  return uniqueAppointments;
+  const all = [
+    ...stored.filter((a) => a.studentId === studentId),
+    ...mockAppointments.filter((a) => a.studentId === studentId),
+  ];
+  return all.filter(
+    (a, i, self) => i === self.findIndex((b) => b.id === a.id)
+  );
 };
 
 export const getAppointmentsByCounselor = (counselorId: string): Appointment[] => {
-  const storedAppointments = JSON.parse(localStorage.getItem('appointments') || '[]');
-  const storedCounselorAppointments = storedAppointments.filter((apt: Appointment) => apt.counselorId === counselorId);
-  const mockCounselorAppointments = mockAppointments.filter((apt) => apt.counselorId === counselorId);
-  const allAppointments = [...storedCounselorAppointments, ...mockCounselorAppointments];
-  const uniqueAppointments = allAppointments.filter((apt, index, self) =>
-    index === self.findIndex((a) => a.id === apt.id)
+  const stored: Appointment[] = JSON.parse(
+    localStorage.getItem('appointments') || '[]'
   );
-  return uniqueAppointments;
+  const all = [
+    ...stored.filter((a) => a.counselorId === counselorId),
+    ...mockAppointments.filter((a) => a.counselorId === counselorId),
+  ];
+  return all.filter(
+    (a, i, self) => i === self.findIndex((b) => b.id === a.id)
+  );
 };
 
 export const getAllAppointments = (): Appointment[] => {
-  const storedAppointments = JSON.parse(localStorage.getItem('appointments') || '[]');
-  const allAppointments = [...storedAppointments, ...mockAppointments];
-  const uniqueAppointments = allAppointments.filter((apt, index, self) =>
-    index === self.findIndex((a) => a.id === apt.id)
+  const stored: Appointment[] = JSON.parse(
+    localStorage.getItem('appointments') || '[]'
   );
-  return uniqueAppointments;
+  const all = [...stored, ...mockAppointments];
+  return all.filter(
+    (a, i, self) => i === self.findIndex((b) => b.id === a.id)
+  );
 };
 
-// System Report functions
 export const getAllSystemReports = (): SystemReport[] => {
-  const storedReports = JSON.parse(localStorage.getItem('systemReports') || '[]');
-  return storedReports;
+  return JSON.parse(localStorage.getItem('systemReports') || '[]');
 };
 
 export const addSystemReport = (report: SystemReport): void => {
@@ -317,8 +345,13 @@ export const addSystemReport = (report: SystemReport): void => {
   localStorage.setItem('systemReports', JSON.stringify(reports));
 };
 
-export const updateSystemReportStatus = (reportId: string, status: 'pending' | 'resolved'): void => {
+export const updateSystemReportStatus = (
+  reportId: string,
+  status: 'pending' | 'resolved'
+): void => {
   const reports = getAllSystemReports();
-  const updated = reports.map(r => r.id === reportId ? { ...r, status } : r);
+  const updated = reports.map((r) =>
+    r.id === reportId ? { ...r, status } : r
+  );
   localStorage.setItem('systemReports', JSON.stringify(updated));
 };
