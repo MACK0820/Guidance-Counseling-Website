@@ -24,7 +24,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '../components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
-import tipLogo from '../../assets/tip-logo.png';
+import tipLogo from '../../../assets/tip-logo.png';
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -121,7 +121,7 @@ export function StudentDashboard() {
     if (editFormData.guardianContact && editFormData.guardianContact.length !== 11) {
       toast.error('Guardian contact must be exactly 11 digits'); return;
     }
-    const updatedUser = { ...user, ...editFormData };
+    const updatedUser = { ...user!, ...editFormData };
     localStorage.setItem('currentUser', JSON.stringify(updatedUser));
     const students = JSON.parse(localStorage.getItem('registeredStudents') || '[]');
     const idx = students.findIndex((s: any) => s.id === user!.id);
