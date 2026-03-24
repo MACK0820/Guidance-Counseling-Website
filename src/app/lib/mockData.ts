@@ -1,7 +1,7 @@
 // Mock database for the application
 export interface User {
   id: string;
-  role: 'superadmin' | 'admin' | 'counselor' | 'student';
+  role: 'superadmin' | 'admin' | 'counselor' | 'student' | 'faculty'; // ← added 'faculty'
   email: string;
   password: string;
   firstName: string;
@@ -26,6 +26,9 @@ export interface User {
   isAvailable?: boolean;
   assignedPrograms?: string[];
   isPendingApproval?: boolean;
+  // Faculty-specific fields  ← NEW
+  department?: string;
+  facultyTitle?: string;
 }
 
 export interface RescheduleProposal {
@@ -33,7 +36,16 @@ export interface RescheduleProposal {
   newTimeSlot: string;
   reason: string;
   proposedAt: string;
-  proposedBy: 'counselor' | 'student'; // who initiated this reschedule
+  proposedBy: 'counselor' | 'student';
+}
+
+// ── NEW: Faculty report interface ─────────────────────────────────────────────
+export interface FacultyReport {
+  facultyId: string;
+  facultyName: string;
+  facultyEmail: string;
+  summary: string;
+  sentAt: string;
 }
 
 export interface Appointment {
@@ -49,9 +61,9 @@ export interface Appointment {
     | 'pending'
     | 'confirmed'
     | 'completed'
-    | 'reschedule_proposed'   // counselor proposed a new time → waiting on student
-    | 'reschedule_requested'  // student requested a new time → waiting on counselor
-    | 'rescheduled';          // both agreed on a new time
+    | 'reschedule_proposed'
+    | 'reschedule_requested'
+    | 'rescheduled';
   program: string;
   purpose?: string;
   sessionType?: 'Personal' | 'Academic' | 'Career' | 'Others';
@@ -60,6 +72,10 @@ export interface Appointment {
   narrativeSummary?: string;
   rescheduleProposal?: RescheduleProposal | null;
   createdAt?: string;
+  // ── NEW: Faculty referral fields ──────────────────────────────────────────
+  referredByFacultyId?: string;
+  referredByFacultyName?: string;
+  facultyReport?: FacultyReport | null;
 }
 
 export interface CounselorAvailability {
@@ -186,6 +202,31 @@ export const mockUsers: User[] = [
       'Bachelor of Science in Computer Engineering',
     ],
   },
+  // ── NEW: Sample faculty members ───────────────────────────────────────────
+  {
+    id: 'FAC001',
+    role: 'faculty',
+    email: 'fcruz@tip.edu.ph',
+    password: 'faculty123',
+    firstName: 'Prof. Jose',
+    lastName: 'Cruz',
+    contactNumber: '09301234567',
+    username: 'fcruz',
+    department: 'College of Computer Studies',
+    facultyTitle: 'Professor',
+  },
+  {
+    id: 'FAC002',
+    role: 'faculty',
+    email: 'fmendoza@tip.edu.ph',
+    password: 'faculty456',
+    firstName: 'Prof. Ana',
+    lastName: 'Mendoza',
+    contactNumber: '09311234567',
+    username: 'fmendoza',
+    department: 'College of Business Education',
+    facultyTitle: 'Associate Professor',
+  },
   {
     id: 'S2024001',
     role: 'student',
@@ -243,7 +284,7 @@ export const timeSlots = [
   '04:00 PM - 05:00 PM',
 ];
 
-// ── Helper: save updated appointment to localStorage ──
+// ── Helper: save updated appointment to localStorage ──────────────────────────
 export const updateAppointmentInStorage = (
   appointmentId: string,
   changes: Partial<Appointment>
@@ -256,6 +297,62 @@ export const updateAppointmentInStorage = (
   );
   localStorage.setItem('appointments', JSON.stringify(updated));
 };
+
+// ── NEW: Time helpers for guards ──────────────────────────────────────────────
+
+function convertTo24h(time12: string): string {
+  const [time, modifier] = time12.trim().split(' ');
+  let [hours, minutes] = time.split(':').map(Number);
+  if (modifier === 'PM' && hours !== 12) hours += 12;
+  if (modifier === 'AM' && hours === 12) hours = 0;
+  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:00`;
+}
+
+function parseSlotStart(date: string, timeSlot: string): Date {
+  const startPart = timeSlot.split(' - ')[0].trim();
+  return new Date(`${date}T${convertTo24h(startPart)}`);
+}
+
+/**
+ * Double-booking guard.
+ * Returns true if the student already has any active (non-completed) appointment.
+ * Use this in BookAppointment to block a second booking.
+ */
+export const studentHasActiveAppointment = (studentId: string): boolean => {
+  const stored: Appointment[] = JSON.parse(
+    localStorage.getItem('appointments') || '[]'
+  );
+  const all = [
+    ...stored.filter((a) => a.studentId === studentId),
+    ...mockAppointments.filter((a) => a.studentId === studentId),
+  ];
+  return all.some((a) =>
+    ['pending', 'confirmed', 'rescheduled', 'reschedule_proposed', 'reschedule_requested'].includes(a.status)
+  );
+};
+
+/**
+ * 3-hour reschedule guard.
+ * Returns true if the appointment start time is within 3 hours from now.
+ * When true, rescheduling should be blocked for both student and counselor.
+ */
+export const isWithin3Hours = (date: string, timeSlot: string): boolean => {
+  try {
+    const slotStart = parseSlotStart(date, timeSlot);
+    const diffHours = (slotStart.getTime() - Date.now()) / (1000 * 60 * 60);
+    return diffHours <= 3;
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * Returns all faculty members from mockUsers.
+ */
+export const getFacultyMembers = (): User[] =>
+  mockUsers.filter((u) => u.role === 'faculty');
+
+// ── Existing finders (unchanged) ──────────────────────────────────────────────
 
 export const findUserByCredentials = (
   identifier: string,

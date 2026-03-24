@@ -4,7 +4,7 @@ import { Label } from './ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { Textarea } from './ui/textarea';
 import { Alert, AlertDescription, AlertTitle } from './ui/alert';
-import { User, mockUsers } from '../lib/mockData';
+import { User, mockUsers, studentHasActiveAppointment } from '../lib/mockData'; // ← added studentHasActiveAppointment
 import { CheckCircle, UserCheck, Calendar, Clock } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -116,6 +116,17 @@ export function BookAppointment({ user, onSuccess }: BookAppointmentProps) {
     setReassignedCounselor(null);
 
     try {
+      // ── DOUBLE-BOOKING GUARD ──────────────────────────────────────────────
+      // Blocks submission if student already has any active appointment
+      if (studentHasActiveAppointment(user.id)) {
+        toast.error(
+          'You already have an active appointment. You cannot book another until your current appointment is completed.'
+        );
+        setIsSubmitting(false);
+        return;
+      }
+      // ─────────────────────────────────────────────────────────────────────
+
       if (!bookingData.date || !bookingData.timeSlot || !bookingData.purpose) {
         toast.error('Please fill in all required fields.');
         setIsSubmitting(false);

@@ -1,13 +1,15 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react'; // ← useMemo added
 import { useNavigate } from 'react-router';
 import { Badge } from '../components/ui/badge';
 import { Input } from '../components/ui/input';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select'; // ← Select added
 import { getCurrentUser, logout } from '../lib/auth';
 import { getAllAppointments, mockUsers, Appointment, User } from '../lib/mockData';
 import { toast } from 'sonner';
 import {
   Calendar, Clock, LogOut, User as UserIcon, Users, Search, GraduationCap,
   Menu, X, Mail, Phone, FileText, AlertCircle, CheckCircle, BookOpen, Key,
+  ChevronDown, ChevronUp, Filter, // ← ChevronDown, ChevronUp, Filter added
 } from 'lucide-react';
 import tipLogo from '../../assets/tip-logo.png';
 
@@ -32,6 +34,17 @@ const STATUS_LABEL: Record<string, string> = {
 function getStatusColor(s: string) { return STATUS_COLOR[s] ?? 'bg-gray-100 text-gray-800 border-gray-300'; }
 function getStatusLabel(s: string) { return STATUS_LABEL[s] ?? s.charAt(0).toUpperCase() + s.slice(1); }
 
+// ── NEW: group completed appointments by counselor → date ─────────────────────
+function groupReports(appointments: Appointment[]): Record<string, Record<string, Appointment[]>> {
+  const out: Record<string, Record<string, Appointment[]>> = {};
+  for (const apt of appointments) {
+    if (!out[apt.counselorName]) out[apt.counselorName] = {};
+    if (!out[apt.counselorName][apt.date]) out[apt.counselorName][apt.date] = [];
+    out[apt.counselorName][apt.date].push(apt);
+  }
+  return out;
+}
+
 export function AdminDashboard() {
   const navigate = useNavigate();
   const [user, setUser]           = useState(getCurrentUser());
@@ -42,8 +55,24 @@ export function AdminDashboard() {
   const [showChangePassword, setShowChangePassword] = useState(false);
   const [passwordData, setPasswordData] = useState({ current:'', newPass:'', confirm:'' });
 
+  // ── NEW: All-appointments filters ─────────────────────────────────────────
+  const [filterStatus,    setFilterStatus]    = useState('all');
+  const [filterCounselor, setFilterCounselor] = useState('all');
+
+  // ── NEW: Reports filters ──────────────────────────────────────────────────
+  const [reportFilterCounselor, setReportFilterCounselor] = useState('all');
+  const [reportFilterDate,      setReportFilterDate]      = useState('');
+  const [expandedCounselors,    setExpandedCounselors]    = useState<Record<string, boolean>>({});
+
+  // ── NEW: Students filters ─────────────────────────────────────────────────
+  const [studentSearch,        setStudentSearch]        = useState('');
+  const [studentFilterCollege, setStudentFilterCollege] = useState('all');
+  const [studentFilterYear,    setStudentFilterYear]    = useState('all');
+
   const students   = mockUsers.filter((u) => u.role === 'student');
   const counselors = mockUsers.filter((u) => u.role === 'counselor');
+  const colleges   = [...new Set(students.map((s) => s.college).filter(Boolean))] as string[];
+  const counselorNames = [...new Set(appointments.map((a) => a.counselorName))];
 
   const refreshAppointments = () => setAppointments(getAllAppointments());
 
@@ -65,15 +94,46 @@ export function AdminDashboard() {
     setShowChangePassword(false);
   };
 
-  const filtered = appointments.filter((apt) =>
-    apt.studentName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    apt.counselorName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    apt.program.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  // ── NEW: Derived filtered lists ───────────────────────────────────────────
 
+  const filtered = useMemo(() => {
+    return appointments.filter((apt) => {
+      const matchSearch =
+        apt.studentName.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        apt.counselorName.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        apt.program.toLowerCase().includes(searchQuery.toLowerCase());
+      const matchStatus    = filterStatus    === 'all' || apt.status === filterStatus;
+      const matchCounselor = filterCounselor === 'all' || apt.counselorName === filterCounselor;
+      return matchSearch && matchStatus && matchCounselor;
+    });
+  }, [appointments, searchQuery, filterStatus, filterCounselor]);
+
+  const completedAppointments = useMemo(() => {
+    return appointments.filter((a) => {
+      const matchCounselor = reportFilterCounselor === 'all' || a.counselorName === reportFilterCounselor;
+      const matchDate      = !reportFilterDate || a.date === reportFilterDate;
+      return a.status === 'completed' && matchCounselor && matchDate;
+    });
+  }, [appointments, reportFilterCounselor, reportFilterDate]);
+
+  const groupedReports = useMemo(() => groupReports(completedAppointments), [completedAppointments]);
+
+  const filteredStudents = useMemo(() => {
+    return students.filter((s) => {
+      const name = `${s.firstName} ${s.lastName}`.toLowerCase();
+      const matchSearch  = !studentSearch || name.includes(studentSearch.toLowerCase()) || (s.studentId || '').includes(studentSearch) || (s.program || '').toLowerCase().includes(studentSearch.toLowerCase());
+      const matchCollege = studentFilterCollege === 'all' || s.college === studentFilterCollege;
+      const matchYear    = studentFilterYear    === 'all' || s.yearLevel === studentFilterYear;
+      return matchSearch && matchCollege && matchYear;
+    });
+  }, [students, studentSearch, studentFilterCollege, studentFilterYear]);
+
+  const toggleCounselor = (name: string) =>
+    setExpandedCounselors((prev) => ({ ...prev, [name]: !prev[name] }));
+
+  // Existing derived
   const completedWithReports = appointments.filter((a) => a.status === 'completed');
   const pendingAppointments  = appointments.filter((a) => a.status === 'pending');
-  // Reschedule activity — show in admin alert
   const rescheduleActivity   = appointments.filter((a) =>
     a.status === 'reschedule_proposed' || a.status === 'reschedule_requested'
   );
@@ -214,7 +274,6 @@ export function AdminDashboard() {
           ))}
         </div>
 
-        {/* Pending alert */}
         {pendingAppointments.length > 0 && (
           <div className="bg-yellow-50 border-2 border-yellow-400 rounded-lg p-3 mb-3 flex items-center gap-3">
             <AlertCircle className="w-5 h-5 text-yellow-600 shrink-0" />
@@ -224,7 +283,6 @@ export function AdminDashboard() {
           </div>
         )}
 
-        {/* Reschedule activity alert */}
         {rescheduleActivity.length > 0 && (
           <div className="bg-purple-50 border-2 border-purple-400 rounded-lg p-3 mb-4 flex items-center gap-3">
             <AlertCircle className="w-5 h-5 text-purple-600 shrink-0" />
@@ -256,14 +314,46 @@ export function AdminDashboard() {
             ))}
           </div>
 
-          {/* ── ALL APPOINTMENTS ── */}
+          {/* ── ALL APPOINTMENTS — with status + counselor filters ── */}
           {activeTab === 'all' && (
             <div>
-              <div className="p-4 border-b border-gray-100">
+              <div className="p-4 border-b border-gray-100 space-y-3">
                 <div className="relative">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
                   <Input placeholder="Search by student, counselor, or program..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="pl-10 border-2 border-gray-200" />
                 </div>
+                {/* ── NEW: Status + counselor dropdowns ── */}
+                <div className="flex gap-2 flex-wrap">
+                  <Select value={filterStatus} onValueChange={setFilterStatus}>
+                    <SelectTrigger className="w-44 border-2 border-gray-200 text-xs h-8">
+                      <Filter className="w-3 h-3 mr-1" /><SelectValue placeholder="All statuses" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All statuses</SelectItem>
+                      {Object.entries(STATUS_LABEL).map(([val, label]) => (
+                        <SelectItem key={val} value={val}>{label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Select value={filterCounselor} onValueChange={setFilterCounselor}>
+                    <SelectTrigger className="w-52 border-2 border-gray-200 text-xs h-8">
+                      <SelectValue placeholder="All counselors" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All counselors</SelectItem>
+                      {counselorNames.map((n) => <SelectItem key={n} value={n}>{n}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                  {(filterStatus !== 'all' || filterCounselor !== 'all' || searchQuery) && (
+                    <button
+                      onClick={() => { setFilterStatus('all'); setFilterCounselor('all'); setSearchQuery(''); }}
+                      className="text-xs text-gray-500 hover:text-red-600 border border-gray-200 rounded px-2 h-8"
+                    >
+                      Clear filters
+                    </button>
+                  )}
+                </div>
+                <p className="text-xs text-gray-500">Showing {filtered.length} of {appointments.length} appointments</p>
               </div>
               <div className="divide-y divide-gray-100 max-h-[500px] overflow-y-auto">
                 {filtered.length === 0 ? (
@@ -287,8 +377,6 @@ export function AdminDashboard() {
                       <span className="flex items-center gap-1"><Clock className="w-3 h-3 text-yellow-500" />{apt.timeSlot}</span>
                     </div>
                     {apt.purpose && <p className="text-xs text-gray-500 mt-1"><span className="font-semibold">Purpose:</span> {apt.purpose}</p>}
-
-                    {/* Reschedule activity visible to admin */}
                     {apt.status === 'reschedule_requested' && apt.rescheduleProposal && (
                       <div className="mt-2 p-2 bg-pink-50 border border-pink-200 rounded text-xs text-pink-800">
                         <p className="font-semibold uppercase mb-0.5">Student requested reschedule</p>
@@ -309,40 +397,136 @@ export function AdminDashboard() {
             </div>
           )}
 
-          {/* ── REPORTS ── */}
+          {/* ── REPORTS — grouped by counselor → date ── */}
           {activeTab === 'reports' && (
-            <div className="divide-y divide-gray-100 max-h-[600px] overflow-y-auto">
-              {completedWithReports.length === 0 ? (
+            <div>
+              {/* Report filters */}
+              <div className="p-4 border-b border-gray-100 flex flex-wrap gap-2 items-center">
+                <Select value={reportFilterCounselor} onValueChange={setReportFilterCounselor}>
+                  <SelectTrigger className="w-52 border-2 border-gray-200 text-xs h-8">
+                    <SelectValue placeholder="All counselors" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All counselors</SelectItem>
+                    {counselorNames.map((n) => <SelectItem key={n} value={n}>{n}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+                <Input
+                  type="date"
+                  value={reportFilterDate}
+                  onChange={(e) => setReportFilterDate(e.target.value)}
+                  className="w-40 border-2 border-gray-200 text-xs h-8"
+                />
+                {(reportFilterCounselor !== 'all' || reportFilterDate) && (
+                  <button
+                    onClick={() => { setReportFilterCounselor('all'); setReportFilterDate(''); }}
+                    className="text-xs text-gray-500 hover:text-red-600 border border-gray-200 rounded px-2 h-8"
+                  >
+                    Clear
+                  </button>
+                )}
+                <span className="text-xs text-gray-500 ml-auto">{completedAppointments.length} completed session(s)</span>
+              </div>
+
+              {completedAppointments.length === 0 ? (
                 <div className="text-center py-12 text-gray-400">
                   <FileText className="w-12 h-12 mx-auto mb-3" />
-                  <p className="font-semibold uppercase text-sm">No completed sessions yet</p>
-                  <p className="text-xs">Completed sessions with counselor reports will appear here.</p>
+                  <p className="font-semibold uppercase text-sm">No completed sessions found</p>
                 </div>
-              ) : completedWithReports.map((apt) => (
-                <div key={apt.id} className="p-4 hover:bg-gray-50 transition">
-                  <div className="flex items-start justify-between mb-2">
-                    <div>
-                      <h4 className="font-bold text-gray-900 text-sm">Counseling Session with {apt.counselorName}</h4>
-                      <p className="text-xs text-gray-500">{apt.studentName} · {apt.program}</p>
-                    </div>
-                  </div>
-                  <div className="flex flex-wrap gap-3 text-xs text-gray-600 mb-2">
-                    <span className="flex items-center gap-1"><Calendar className="w-3 h-3 text-yellow-500" />{new Date(apt.date).toLocaleDateString('en-PH', { weekday:'short', year:'numeric', month:'long', day:'numeric' })}</span>
-                    <span className="flex items-center gap-1"><Clock className="w-3 h-3 text-yellow-500" />{apt.timeSlot}</span>
-                  </div>
-                  {apt.purpose && <p className="text-xs text-gray-600 mb-1"><span className="font-semibold">Purpose:</span> {apt.purpose}</p>}
-                  {apt.narrativeSummary ? (
-                    <div className="mt-2 p-3 bg-blue-50 border border-blue-200 rounded">
-                      <p className="text-xs font-bold uppercase text-blue-700 mb-1 flex items-center gap-1">
-                        <FileText className="w-3 h-3" /> Counselor's Session Summary
-                      </p>
-                      <p className="text-xs text-blue-900">{apt.narrativeSummary}</p>
-                    </div>
-                  ) : (
-                    <p className="text-xs text-gray-400 italic mt-1">No narrative summary provided.</p>
-                  )}
+              ) : (
+                <div className="max-h-[600px] overflow-y-auto divide-y divide-gray-200">
+                  {Object.entries(groupedReports).map(([counselorName, dateGroups]) => {
+                    const totalSessions = Object.values(dateGroups).reduce((sum, arr) => sum + arr.length, 0);
+                    const isExpanded    = expandedCounselors[counselorName] !== false; // default expanded
+                    return (
+                      <div key={counselorName}>
+                        {/* Counselor header — clickable to collapse */}
+                        <button
+                          onClick={() => toggleCounselor(counselorName)}
+                          className="w-full flex items-center justify-between px-4 py-3 bg-gray-50 hover:bg-gray-100 transition text-left"
+                        >
+                          <div className="flex items-center gap-3">
+                            <div className="w-8 h-8 bg-yellow-400 rounded-full flex items-center justify-center">
+                              <Users className="w-4 h-4 text-black" />
+                            </div>
+                            <div>
+                              <p className="font-bold text-gray-900 text-sm">{counselorName}</p>
+                              <p className="text-xs text-gray-500">
+                                {totalSessions} completed session{totalSessions !== 1 ? 's' : ''} · {Object.keys(dateGroups).length} date{Object.keys(dateGroups).length !== 1 ? 's' : ''}
+                              </p>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            {/* ── High-volume badge: 5+ sessions total ── */}
+                            {totalSessions >= 5 && (
+                              <span className="text-xs bg-yellow-100 text-yellow-800 border border-yellow-300 px-2 py-0.5 rounded font-semibold">High volume</span>
+                            )}
+                            {isExpanded ? <ChevronUp className="w-4 h-4 text-gray-400" /> : <ChevronDown className="w-4 h-4 text-gray-400" />}
+                          </div>
+                        </button>
+
+                        {isExpanded && (
+                          <div className="divide-y divide-gray-100">
+                            {Object.entries(dateGroups)
+                              .sort(([a], [b]) => b.localeCompare(a)) // newest date first
+                              .map(([date, apts]) => (
+                                <div key={date} className="px-4 py-3">
+                                  {/* Date sub-header */}
+                                  <div className="flex items-center gap-2 mb-2">
+                                    <Calendar className="w-3.5 h-3.5 text-yellow-500" />
+                                    <p className="text-xs font-bold uppercase text-gray-600">
+                                      {new Date(date).toLocaleDateString('en-PH', { weekday:'long', year:'numeric', month:'long', day:'numeric' })}
+                                    </p>
+                                    <span className="text-xs bg-blue-50 text-blue-700 border border-blue-200 px-1.5 py-0.5 rounded">
+                                      {apts.length} session{apts.length !== 1 ? 's' : ''}
+                                    </span>
+                                    {/* ── 5+ in a day badge ── */}
+                                    {apts.length >= 5 && (
+                                      <span className="text-xs bg-orange-50 text-orange-700 border border-orange-200 px-1.5 py-0.5 rounded font-semibold">5+ in a day</span>
+                                    )}
+                                  </div>
+                                  {/* Sessions for that date */}
+                                  <div className="space-y-2 pl-5">
+                                    {apts.map((apt) => (
+                                      <div key={apt.id} className="p-3 bg-white border border-gray-200 rounded-lg">
+                                        <div className="flex items-start justify-between mb-1">
+                                          <div>
+                                            <p className="font-semibold text-gray-900 text-xs">{apt.studentName}</p>
+                                            <p className="text-xs text-gray-500">{apt.program} · {apt.timeSlot}</p>
+                                          </div>
+                                          {apt.sessionType && (
+                                            <span className="text-xs bg-blue-100 text-blue-700 border border-blue-200 px-2 py-0.5 rounded">{apt.sessionType}</span>
+                                          )}
+                                        </div>
+                                        {apt.purpose && <p className="text-xs text-gray-600 mb-1"><span className="font-semibold">Purpose:</span> {apt.purpose}</p>}
+                                        {apt.narrativeSummary ? (
+                                          <div className="mt-1 p-2 bg-blue-50 border border-blue-200 rounded">
+                                            <p className="text-xs font-bold uppercase text-blue-700 mb-0.5 flex items-center gap-1">
+                                              <FileText className="w-3 h-3" /> Session Summary
+                                            </p>
+                                            <p className="text-xs text-blue-900">{apt.narrativeSummary}</p>
+                                          </div>
+                                        ) : (
+                                          <p className="text-xs text-gray-400 italic">No summary provided.</p>
+                                        )}
+                                        {(apt as any).facultyReport && (
+                                          <div className="mt-1 p-2 bg-green-50 border border-green-200 rounded text-xs text-green-800">
+                                            <p className="font-semibold uppercase mb-0.5">Faculty Report Sent</p>
+                                            <p>To: {(apt as any).facultyReport.facultyName}</p>
+                                          </div>
+                                        )}
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
-              ))}
+              )}
             </div>
           )}
 
@@ -373,24 +557,72 @@ export function AdminDashboard() {
             </div>
           )}
 
-          {/* ── STUDENTS ── */}
+          {/* ── STUDENTS — with search + college + year level filters ── */}
           {activeTab === 'students' && (
-            <div className="divide-y divide-gray-100 max-h-[500px] overflow-y-auto">
-              {students.map((s) => (
-                <div key={s.id} className="p-4 hover:bg-gray-50 transition flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 bg-yellow-100 rounded-full flex items-center justify-center">
-                      <GraduationCap className="w-5 h-5 text-yellow-600" />
-                    </div>
-                    <div>
-                      <p className="font-bold text-gray-900 text-sm">{s.firstName} {s.lastName}</p>
-                      <p className="text-xs text-gray-500">{s.program}</p>
-                      <p className="text-xs text-gray-400">{s.college}</p>
-                    </div>
-                  </div>
-                  <span className="text-xs font-bold text-gray-500 bg-gray-100 px-2 py-1 rounded">{s.id}</span>
+            <div>
+              <div className="p-4 border-b border-gray-100 space-y-2">
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                  <Input placeholder="Search by name, ID, or program..." value={studentSearch} onChange={(e) => setStudentSearch(e.target.value)} className="pl-10 border-2 border-gray-200" />
                 </div>
-              ))}
+                <div className="flex gap-2 flex-wrap">
+                  <Select value={studentFilterCollege} onValueChange={setStudentFilterCollege}>
+                    <SelectTrigger className="w-64 border-2 border-gray-200 text-xs h-8">
+                      <SelectValue placeholder="All colleges" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All colleges</SelectItem>
+                      {colleges.map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                  <Select value={studentFilterYear} onValueChange={setStudentFilterYear}>
+                    <SelectTrigger className="w-32 border-2 border-gray-200 text-xs h-8">
+                      <SelectValue placeholder="All years" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All years</SelectItem>
+                      {['1','2','3','4','5'].map((y) => (
+                        <SelectItem key={y} value={y}>
+                          {y === '1' ? '1st' : y === '2' ? '2nd' : y === '3' ? '3rd' : `${y}th`} Year
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  {(studentSearch || studentFilterCollege !== 'all' || studentFilterYear !== 'all') && (
+                    <button
+                      onClick={() => { setStudentSearch(''); setStudentFilterCollege('all'); setStudentFilterYear('all'); }}
+                      className="text-xs text-gray-500 hover:text-red-600 border border-gray-200 rounded px-2 h-8"
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
+                <p className="text-xs text-gray-500">Showing {filteredStudents.length} of {students.length} students</p>
+              </div>
+              <div className="divide-y divide-gray-100 max-h-[500px] overflow-y-auto">
+                {filteredStudents.length === 0 ? (
+                  <div className="text-center py-12 text-gray-400">
+                    <GraduationCap className="w-12 h-12 mx-auto mb-3" />
+                    <p className="font-semibold uppercase text-sm">No students found</p>
+                  </div>
+                ) : filteredStudents.map((s) => (
+                  <div key={s.id} className="p-4 hover:bg-gray-50 transition flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 bg-yellow-100 rounded-full flex items-center justify-center">
+                        <GraduationCap className="w-5 h-5 text-yellow-600" />
+                      </div>
+                      <div>
+                        <p className="font-bold text-gray-900 text-sm">{s.firstName} {s.lastName}</p>
+                        <p className="text-xs text-gray-500">{s.program}</p>
+                        <p className="text-xs text-gray-400">
+                          {s.college} · {s.yearLevel ? ['','1st','2nd','3rd','4th','5th'][Number(s.yearLevel)] : '?'} Year · {(s as any).studentStatus || 'Regular'}
+                        </p>
+                      </div>
+                    </div>
+                    <span className="text-xs font-bold text-gray-500 bg-gray-100 px-2 py-1 rounded">{s.id}</span>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
 

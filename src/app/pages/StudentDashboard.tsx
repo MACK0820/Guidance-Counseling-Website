@@ -6,6 +6,8 @@ import { getCurrentUser, logout } from '../lib/auth';
 import {
   getAppointmentsByStudent,
   updateAppointmentInStorage,
+  studentHasActiveAppointment, // ← NEW
+  isWithin3Hours,              // ← NEW
   Appointment,
   timeSlots,
 } from '../lib/mockData';
@@ -13,7 +15,7 @@ import { toast } from 'sonner';
 import {
   Calendar, Clock, CalendarPlus, X, User, LogOut, Menu,
   GraduationCap, Phone, MapPin, BookOpen, Edit, Key, ChevronRight,
-  Shield, CalendarClock, CheckCircle, XCircle,
+  Shield, CalendarClock, CheckCircle, XCircle, AlertCircle, // ← AlertCircle added
 } from 'lucide-react';
 import { Input } from '../components/ui/input';
 import { Textarea } from '../components/ui/textarea';
@@ -165,7 +167,6 @@ export function StudentDashboard() {
 
   // ── DECLINE counselor's reschedule proposal ───────────────────────────────
   const handleDeclineCounselorReschedule = (appointmentId: string) => {
-    // Revert to whatever it was before — for simplicity revert to pending
     const changes: Partial<Appointment> = {
       status:            'pending',
       rescheduleProposal: null,
@@ -177,8 +178,14 @@ export function StudentDashboard() {
     toast.info('Reschedule declined. Your original appointment is back to pending.');
   };
 
-  // ── OPEN student's own reschedule request modal ───────────────────────────
+  // ── OPEN student's own reschedule request modal — with 3-hour guard ───────
   const handleOpenStudentReschedule = (apt: Appointment) => {
+    // ── 3-HOUR GUARD ──────────────────────────────────────────────────────
+    if (isWithin3Hours(apt.date, apt.timeSlot)) {
+      toast.error('Cannot request a reschedule within 3 hours of your appointment time.');
+      return;
+    }
+    // ──────────────────────────────────────────────────────────────────────
     setRescheduleData({ newDate: '', newTimeSlot: '', reason: '' });
     setRescheduleDialog({ open: true, appointment: apt });
   };
@@ -215,9 +222,6 @@ export function StudentDashboard() {
   const handleCancelStudentRescheduleRequest = (appointmentId: string) => {
     const apt = appointments.find((a) => a.id === appointmentId);
     if (!apt) return;
-    // Revert to the status before the request (pending or confirmed)
-    // We store the previous status on rescheduleProposal.previousStatus ideally,
-    // but since we don't have that yet we default back to pending
     const changes: Partial<Appointment> = {
       status:            'pending',
       rescheduleProposal: null,
@@ -232,6 +236,7 @@ export function StudentDashboard() {
   // ── derived ───────────────────────────────────────────────────────────────
 
   const counselorProposals   = appointments.filter((a) => a.status === 'reschedule_proposed');
+  const hasActive            = studentHasActiveAppointment(user?.id || ''); // ← NEW
   const upcomingAppointments = appointments.filter((a) =>
     ['pending', 'confirmed', 'rescheduled', 'reschedule_requested', 'reschedule_proposed'].includes(a.status)
   );
@@ -459,7 +464,6 @@ export function StudentDashboard() {
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
-            {/* Current schedule info */}
             {rescheduleDialog.appointment && (
               <div className="p-3 bg-pink-50 border border-pink-200 rounded">
                 <p className="text-xs font-bold uppercase text-gray-700 mb-1">Current Schedule</p>
@@ -475,8 +479,6 @@ export function StudentDashboard() {
                 </p>
               </div>
             )}
-
-            {/* New date */}
             <div>
               <Label className="text-xs uppercase font-bold text-gray-700">Preferred new date *</Label>
               <div className="relative mt-1">
@@ -490,8 +492,6 @@ export function StudentDashboard() {
                 />
               </div>
             </div>
-
-            {/* New time slot */}
             <div>
               <Label className="text-xs uppercase font-bold text-gray-700">Preferred time slot *</Label>
               <Select
@@ -508,8 +508,6 @@ export function StudentDashboard() {
                 </SelectContent>
               </Select>
             </div>
-
-            {/* Reason */}
             <div>
               <Label className="text-xs uppercase font-bold text-gray-700">
                 Reason *{' '}
@@ -522,12 +520,10 @@ export function StudentDashboard() {
                 className="mt-1 border-2 border-gray-300 focus:border-pink-500 min-h-[90px]"
               />
             </div>
-
             <div className="p-3 bg-blue-50 border border-blue-200 rounded text-xs text-blue-800">
               <p className="font-semibold uppercase mb-0.5">What happens next</p>
               <p>Your counselor will review your request and either <strong>approve your preferred time</strong> or <strong>propose a different time</strong>. Your current appointment stays active until they respond.</p>
             </div>
-
             <div className="flex gap-2 pt-2">
               <button
                 onClick={handleSubmitStudentReschedule}
@@ -615,13 +611,34 @@ export function StudentDashboard() {
             </h2>
             <p className="text-sm text-gray-500">{user.program} | {user.college}</p>
           </div>
+          {/* ── DOUBLE-BOOKING: gray out button if student has active appointment ── */}
           <button
-            onClick={() => setShowBooking(true)}
-            className="flex items-center gap-2 bg-yellow-400 hover:bg-yellow-500 text-black font-bold px-4 py-2 rounded uppercase text-xs tracking-wide transition"
+            onClick={() => {
+              if (hasActive) {
+                toast.error('You already have an active appointment. Please wait until it is completed before booking another.');
+                return;
+              }
+              setShowBooking(true);
+            }}
+            className={`flex items-center gap-2 font-bold px-4 py-2 rounded uppercase text-xs tracking-wide transition ${
+              hasActive
+                ? 'bg-gray-200 text-gray-500 cursor-not-allowed'
+                : 'bg-yellow-400 hover:bg-yellow-500 text-black'
+            }`}
           >
             <CalendarPlus className="w-4 h-4" /> Book Appointment
           </button>
         </div>
+
+        {/* ── NEW: Active appointment notice ──────────────────────────────────── */}
+        {hasActive && (
+          <div className="bg-amber-50 border-2 border-amber-400 rounded-lg p-3 mb-6 flex items-center gap-3">
+            <AlertCircle className="w-5 h-5 text-amber-600 shrink-0" />
+            <p className="text-sm text-amber-800 font-semibold">
+              You have an active appointment. You cannot book another until your current appointment is completed.
+            </p>
+          </div>
+        )}
 
         {/* Booking Modal */}
         {showBooking && (
@@ -712,7 +729,7 @@ export function StudentDashboard() {
                     </p>
                   )}
 
-                  {/* ── Student requested reschedule — show their pending request ── */}
+                  {/* Student requested reschedule — show their pending request */}
                   {apt.status === 'reschedule_requested' && apt.rescheduleProposal && (
                     <div className="mt-2 p-2 bg-pink-50 border border-pink-200 rounded text-xs text-pink-800">
                       <p className="font-semibold uppercase mb-1">Your reschedule request — waiting for counselor</p>
@@ -733,22 +750,28 @@ export function StudentDashboard() {
                     </div>
                   )}
 
-                  {/* ── Rescheduled confirmation note ── */}
+                  {/* Rescheduled confirmation note */}
                   {apt.status === 'rescheduled' && (
                     <div className="mt-2 p-2 bg-indigo-50 border border-indigo-200 rounded text-xs text-indigo-800">
                       <p className="font-semibold uppercase mb-0.5">Session rescheduled — new time confirmed</p>
                     </div>
                   )}
 
-                  {/* ── Action buttons — Request reschedule (pending or confirmed only) ── */}
+                  {/* Action buttons — Request reschedule (pending or confirmed only) */}
                   {(apt.status === 'pending' || apt.status === 'confirmed') && (
-                    <div className="flex gap-2 mt-3">
+                    <div className="flex items-center gap-2 mt-3">
                       <button
                         onClick={() => handleOpenStudentReschedule(apt)}
                         className="flex items-center justify-center gap-1 bg-pink-50 hover:bg-pink-100 border border-pink-300 text-pink-700 font-bold py-1.5 px-3 rounded text-xs uppercase tracking-wide transition"
                       >
                         <CalendarClock className="w-3 h-3" /> Request Reschedule
                       </button>
+                      {/* ── NEW: show inline note if within 3 hours ── */}
+                      {isWithin3Hours(apt.date, apt.timeSlot) && (
+                        <span className="text-xs text-gray-500 flex items-center gap-1 italic">
+                          <AlertCircle className="w-3 h-3" /> Too close to reschedule
+                        </span>
+                      )}
                     </div>
                   )}
                 </div>

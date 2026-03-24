@@ -13,13 +13,17 @@ import { getCurrentUser, logout } from '../lib/auth';
 import {
   getAppointmentsByCounselor,
   updateAppointmentInStorage,
+  getFacultyMembers,  // ← NEW
+  isWithin3Hours,     // ← NEW
   Appointment,
   timeSlots,
+  User,
 } from '../lib/mockData';
 import { toast } from 'sonner';
 import {
   Calendar, Clock, CheckCircle, AlertCircle, Menu, X,
-  User, LogOut, Phone, Mail, BookOpen, FileText, Key, CalendarClock,
+  User as UserIcon, LogOut, Phone, Mail, BookOpen, FileText, Key,
+  CalendarClock, Send, // ← Send added
 } from 'lucide-react';
 import tipLogo from '../../assets/tip-logo.png';
 
@@ -56,15 +60,24 @@ export function CounselorDashboard() {
   const [showProfile, setShowProfile]   = useState(false);
   const [activeTab, setActiveTab] = useState<'pending' | 'upcoming' | 'completed'>('pending');
 
-  // Report dialog
+  // Report dialog — narrativeSummary is now REQUIRED
   const [reportDialog, setReportDialog] = useState<{
     open: boolean; appointmentId: string | null; appointment?: Appointment | null;
   }>({ open: false, appointmentId: null, appointment: null });
   const [reportData, setReportData] = useState({
     narrativeSummary: '', sessionType: '' as Appointment['sessionType'],
   });
+  // ── NEW: validation errors for report form ────────────────────────────────
+  const [reportErrors, setReportErrors] = useState({ narrativeSummary: '', sessionType: '' });
 
-  // Counselor-initiated reschedule dialog (for pending/confirmed)
+  // ── NEW: Faculty report dialog ────────────────────────────────────────────
+  const [facultyReportDialog, setFacultyReportDialog] = useState<{
+    open: boolean; appointment: Appointment | null;
+  }>({ open: false, appointment: null });
+  const [facultyReportData, setFacultyReportData] = useState({ facultyId: '', summary: '' });
+  const [facultyMembers, setFacultyMembers]        = useState<User[]>([]);
+
+  // Counselor-initiated reschedule dialog
   const [rescheduleDialog, setRescheduleDialog] = useState<{
     open: boolean; appointment: Appointment | null;
   }>({ open: false, appointment: null });
@@ -72,7 +85,7 @@ export function CounselorDashboard() {
     newDate: '', newTimeSlot: '', reason: '',
   });
 
-  // Counter-propose dialog (when student requested a reschedule the counselor can't approve)
+  // Counter-propose dialog
   const [counterDialog, setCounterDialog] = useState<{
     open: boolean; appointment: Appointment | null;
   }>({ open: false, appointment: null });
@@ -93,6 +106,7 @@ export function CounselorDashboard() {
   useEffect(() => {
     if (!user || user.role !== 'counselor') { navigate('/'); return; }
     setIsAvailable(user.isAvailable || false);
+    setFacultyMembers(getFacultyMembers()); // ← NEW
     refreshAppointments();
     const id = setInterval(refreshAppointments, 3000);
     return () => clearInterval(id);
@@ -136,26 +150,64 @@ export function CounselorDashboard() {
     toast.success('Session marked as done!');
   };
 
-  // ── REPORT ────────────────────────────────────────────────────────────────
+  // ── REPORT — narrative summary now REQUIRED ───────────────────────────────
   const handleOpenReport = (apt: Appointment) => {
+    setReportErrors({ narrativeSummary: '', sessionType: '' });
     setReportData({ narrativeSummary: apt.narrativeSummary || '', sessionType: apt.sessionType || '' as any });
     setReportDialog({ open: true, appointmentId: apt.id, appointment: apt });
   };
 
   const handleSubmitReport = () => {
-    if (!reportData.sessionType) { toast.error('Please select a session type.'); return; }
+    // Validate both fields
+    const errs = { narrativeSummary: '', sessionType: '' };
+    if (!reportData.sessionType)             errs.sessionType      = 'Please select a session type.';
+    if (!reportData.narrativeSummary.trim()) errs.narrativeSummary = 'Narrative summary is required.';
+    if (errs.sessionType || errs.narrativeSummary) {
+      setReportErrors(errs);
+      return;
+    }
     applyChange(reportDialog.appointmentId!, {
       status: 'completed',
       sessionType: reportData.sessionType,
-      narrativeSummary: reportData.narrativeSummary,
+      narrativeSummary: reportData.narrativeSummary.trim(),
     });
     setReportDialog({ open: false, appointmentId: null, appointment: null });
     setReportData({ narrativeSummary: '', sessionType: '' as any });
     toast.success('Report submitted successfully!');
   };
 
-  // ── COUNSELOR-INITIATED RESCHEDULE ────────────────────────────────────────
+  // ── NEW: Faculty report ───────────────────────────────────────────────────
+  const handleOpenFacultyReport = (apt: Appointment) => {
+    setFacultyReportData({ facultyId: apt.referredByFacultyId || '', summary: apt.narrativeSummary || '' });
+    setFacultyReportDialog({ open: true, appointment: apt });
+  };
+
+  const handleSendFacultyReport = () => {
+    if (!facultyReportData.facultyId)      { toast.error('Please select a faculty member.'); return; }
+    if (!facultyReportData.summary.trim()) { toast.error('Please write a summary to send.'); return; }
+    const faculty = facultyMembers.find((f) => f.id === facultyReportData.facultyId);
+    if (!faculty) return;
+    applyChange(facultyReportDialog.appointment!.id, {
+      facultyReport: {
+        facultyId:    faculty.id,
+        facultyName:  `${faculty.firstName} ${faculty.lastName}`,
+        facultyEmail: faculty.email,
+        summary:      facultyReportData.summary.trim(),
+        sentAt:       new Date().toISOString(),
+      },
+    });
+    setFacultyReportDialog({ open: false, appointment: null });
+    toast.success(`Report sent to ${faculty.firstName} ${faculty.lastName}!`);
+  };
+
+  // ── COUNSELOR-INITIATED RESCHEDULE — with 3-hour guard ───────────────────
   const handleOpenReschedule = (apt: Appointment) => {
+    // ── 3-HOUR GUARD ──────────────────────────────────────────────────────
+    if (isWithin3Hours(apt.date, apt.timeSlot)) {
+      toast.error('Cannot reschedule within 3 hours of the appointment time.');
+      return;
+    }
+    // ──────────────────────────────────────────────────────────────────────
     setRescheduleData({ newDate: '', newTimeSlot: '', reason: '' });
     setRescheduleDialog({ open: true, appointment: apt });
   };
@@ -200,7 +252,7 @@ export function CounselorDashboard() {
     toast.success("Student's reschedule request approved!");
   };
 
-  // ── COUNTER-PROPOSE (counselor can't do student's requested time) ──────────
+  // ── COUNTER-PROPOSE ───────────────────────────────────────────────────────
   const handleOpenCounter = (apt: Appointment) => {
     setCounterData({ newDate: '', newTimeSlot: '', reason: '' });
     setCounterDialog({ open: true, appointment: apt });
@@ -217,7 +269,6 @@ export function CounselorDashboard() {
     if (checkConflict(apt.counselorId, counterData.newDate, counterData.newTimeSlot, apt.id)) {
       toast.error('That time slot is already booked. Please choose a different one.'); return;
     }
-    // Switch to counselor-proposed flow so student can accept/decline
     applyChange(apt.id, {
       status: 'reschedule_proposed',
       rescheduleProposal: {
@@ -252,7 +303,6 @@ export function CounselorDashboard() {
 
   // ── derived ───────────────────────────────────────────────────────────────
 
-  // Pending tab includes: pending, reschedule_requested, reschedule_proposed (awaiting student)
   const pendingGroup  = appointments.filter((a) =>
     ['pending', 'reschedule_requested', 'reschedule_proposed'].includes(a.status)
   );
@@ -309,7 +359,7 @@ export function CounselorDashboard() {
               </div>
               <div className="flex items-center gap-3">
                 <div className="w-14 h-14 bg-yellow-400 rounded-full flex items-center justify-center">
-                  <User className="w-7 h-7 text-black" />
+                  <UserIcon className="w-7 h-7 text-black" />
                 </div>
                 <div>
                   <p className="font-bold text-white">{user.firstName} {user.lastName}</p>
@@ -376,7 +426,7 @@ export function CounselorDashboard() {
         </div>
       )}
 
-      {/* ── SESSION REPORT DIALOG ── */}
+      {/* ── SESSION REPORT DIALOG — narrative summary REQUIRED ── */}
       <Dialog open={reportDialog.open} onOpenChange={(open) => setReportDialog({ open, appointmentId: null, appointment: null })}>
         <DialogContent className="max-w-lg">
           <DialogHeader>
@@ -402,8 +452,14 @@ export function CounselorDashboard() {
             )}
             <div>
               <Label className="text-xs uppercase font-bold text-gray-700">Session Type *</Label>
-              <Select value={reportData.sessionType} onValueChange={(v) => setReportData({ ...reportData, sessionType: v as any })}>
-                <SelectTrigger className="mt-1 border-2 border-gray-300">
+              <Select
+                value={reportData.sessionType}
+                onValueChange={(v) => {
+                  setReportData({ ...reportData, sessionType: v as any });
+                  setReportErrors({ ...reportErrors, sessionType: '' });
+                }}
+              >
+                <SelectTrigger className={`mt-1 border-2 ${reportErrors.sessionType ? 'border-red-400' : 'border-gray-300'}`}>
                   <SelectValue placeholder="Select session type" />
                 </SelectTrigger>
                 <SelectContent>
@@ -412,19 +468,90 @@ export function CounselorDashboard() {
                   ))}
                 </SelectContent>
               </Select>
+              {reportErrors.sessionType && (
+                <p className="text-xs text-red-500 mt-1">{reportErrors.sessionType}</p>
+              )}
             </div>
             <div>
-              <Label className="text-xs uppercase font-bold text-gray-700">Narrative Summary (Optional)</Label>
+              {/* ── CHANGED: removed "(Optional)" — now REQUIRED ── */}
+              <Label className="text-xs uppercase font-bold text-gray-700">
+                Narrative Summary <span className="text-red-500">*</span>
+              </Label>
               <Textarea
-                placeholder="Write a brief summary of the session..."
+                placeholder="Write a summary of the session, key concerns discussed, and any recommendations..."
                 value={reportData.narrativeSummary}
-                onChange={(e) => setReportData({ ...reportData, narrativeSummary: e.target.value })}
-                className="mt-1 border-2 border-gray-300 focus:border-yellow-500 min-h-[120px]"
+                onChange={(e) => {
+                  setReportData({ ...reportData, narrativeSummary: e.target.value });
+                  setReportErrors({ ...reportErrors, narrativeSummary: '' });
+                }}
+                className={`mt-1 border-2 ${reportErrors.narrativeSummary ? 'border-red-400 focus:border-red-500' : 'border-gray-300 focus:border-yellow-500'} min-h-[140px]`}
               />
+              {reportErrors.narrativeSummary
+                ? <p className="text-xs text-red-500 mt-1">{reportErrors.narrativeSummary}</p>
+                : <p className="text-xs text-gray-400 mt-1">Required. Describe what was discussed and any follow-up needed.</p>
+              }
             </div>
             <div className="flex gap-2 pt-2">
               <button onClick={handleSubmitReport} className="flex-1 bg-yellow-400 hover:bg-yellow-500 text-black font-bold py-2 rounded uppercase text-sm tracking-wide transition">Mark as Completed</button>
               <button onClick={() => setReportDialog({ open:false, appointmentId:null, appointment:null })} className="flex-1 bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold py-2 rounded uppercase text-sm tracking-wide transition">Cancel</button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── NEW: FACULTY REPORT DIALOG ── */}
+      <Dialog open={facultyReportDialog.open} onOpenChange={(open) => setFacultyReportDialog({ open, appointment: null })}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="uppercase tracking-wide text-gray-900 flex items-center gap-2">
+              <Send className="w-5 h-5 text-blue-500" /> Send Report to Faculty
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            {facultyReportDialog.appointment && (
+              <div className="p-3 bg-gray-50 border border-gray-200 rounded">
+                <p className="text-xs font-bold uppercase text-gray-700 mb-1">Regarding</p>
+                <p className="text-xs text-gray-700"><span className="font-semibold">Student:</span> {facultyReportDialog.appointment.studentName}</p>
+                <p className="text-xs text-gray-700">
+                  <span className="font-semibold">Session:</span>{' '}
+                  {new Date(facultyReportDialog.appointment.date).toLocaleDateString('en-PH', { month:'short', day:'numeric', year:'numeric' })} · {facultyReportDialog.appointment.purpose}
+                </p>
+              </div>
+            )}
+            <div>
+              <Label className="text-xs uppercase font-bold text-gray-700">Send to Faculty Member *</Label>
+              <Select value={facultyReportData.facultyId} onValueChange={(v) => setFacultyReportData({ ...facultyReportData, facultyId: v })}>
+                <SelectTrigger className="mt-1 border-2 border-gray-300">
+                  <SelectValue placeholder="Select faculty" />
+                </SelectTrigger>
+                <SelectContent>
+                  {facultyMembers.map((f) => (
+                    <SelectItem key={f.id} value={f.id}>
+                      {f.firstName} {f.lastName} — {f.department}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label className="text-xs uppercase font-bold text-gray-700">
+                Short Report for Faculty *{' '}
+                <span className="normal-case font-normal text-gray-500">(keep brief — no sensitive details)</span>
+              </Label>
+              <Textarea
+                placeholder="e.g. Student attended the session. Key academic concerns were discussed. Recommended follow-up in 2 weeks. No urgent concerns at this time."
+                value={facultyReportData.summary}
+                onChange={(e) => setFacultyReportData({ ...facultyReportData, summary: e.target.value })}
+                className="mt-1 border-2 border-gray-300 focus:border-blue-500 min-h-[110px]"
+              />
+            </div>
+            <div className="p-3 bg-amber-50 border border-amber-200 rounded text-xs text-amber-800">
+              <p className="font-semibold uppercase mb-0.5">Privacy reminder</p>
+              <p>Only share general outcomes. Do not include sensitive personal disclosures in the faculty report.</p>
+            </div>
+            <div className="flex gap-2 pt-2">
+              <button onClick={handleSendFacultyReport} className="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 rounded uppercase text-sm tracking-wide transition">Send Report</button>
+              <button onClick={() => setFacultyReportDialog({ open:false, appointment:null })} className="flex-1 bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold py-2 rounded uppercase text-sm tracking-wide transition">Cancel</button>
             </div>
           </div>
         </DialogContent>
@@ -481,7 +608,7 @@ export function CounselorDashboard() {
         </DialogContent>
       </Dialog>
 
-      {/* ── COUNTER-PROPOSE DIALOG (student requested, counselor can't do that time) ── */}
+      {/* ── COUNTER-PROPOSE DIALOG ── */}
       <Dialog open={counterDialog.open} onOpenChange={(open) => setCounterDialog({ open, appointment: null })}>
         <DialogContent className="max-w-lg">
           <DialogHeader>
@@ -565,9 +692,9 @@ export function CounselorDashboard() {
         {/* Stats */}
         <div className="grid grid-cols-3 gap-4 mb-6">
           {[
-            { label:'Pending',   value: pendingGroup.length,                                         color:'border-yellow-400 bg-yellow-50',  textColor:'text-yellow-800' },
-            { label:'Upcoming',  value: upcomingGroup.length,                                        color:'border-green-400 bg-green-50',    textColor:'text-green-800' },
-            { label:'Completed', value: completedGroup.length,                                       color:'border-blue-400 bg-blue-50',      textColor:'text-blue-800' },
+            { label:'Pending',   value: pendingGroup.length,   color:'border-yellow-400 bg-yellow-50', textColor:'text-yellow-800' },
+            { label:'Upcoming',  value: upcomingGroup.length,  color:'border-green-400 bg-green-50',   textColor:'text-green-800' },
+            { label:'Completed', value: completedGroup.length, color:'border-blue-400 bg-blue-50',     textColor:'text-blue-800' },
           ].map(({ label, value, color, textColor }) => (
             <div key={label} className={`${color} border-2 rounded-lg shadow p-4 text-center`}>
               <p className={`text-2xl font-bold ${textColor}`}>{value}</p>
@@ -607,6 +734,10 @@ export function CounselorDashboard() {
                   <div className="flex-1">
                     <h4 className="font-bold text-gray-900 text-sm">Counseling Session with {apt.studentName}</h4>
                     <p className="text-xs text-gray-500">{apt.program}</p>
+                    {/* ── NEW: show referral badge if applicable ── */}
+                    {apt.referredByFacultyName && (
+                      <p className="text-xs text-blue-600 mt-0.5">Referred by: {apt.referredByFacultyName}</p>
+                    )}
                   </div>
                   <Badge className={`${getStatusColor(apt.status)} border text-xs uppercase font-bold ml-2`}>
                     {getStatusLabel(apt.status)}
@@ -629,6 +760,13 @@ export function CounselorDashboard() {
                   <div className="mt-2 p-2 bg-blue-50 border border-blue-200 rounded text-xs text-blue-800">
                     <p className="font-semibold uppercase mb-1">Session Summary:</p>
                     <p>{apt.narrativeSummary}</p>
+                  </div>
+                )}
+                {/* ── NEW: show faculty report sent badge ── */}
+                {apt.facultyReport && (
+                  <div className="mt-1 p-2 bg-green-50 border border-green-200 rounded text-xs text-green-800">
+                    <p className="font-semibold uppercase mb-0.5">Faculty Report Sent</p>
+                    <p>To: {apt.facultyReport.facultyName} · {new Date(apt.facultyReport.sentAt).toLocaleDateString('en-PH', { month:'short', day:'numeric', year:'numeric' })}</p>
                   </div>
                 )}
 
@@ -698,11 +836,17 @@ export function CounselorDashboard() {
                   </div>
                 )}
 
-                {/* ── COMPLETED — edit report ── */}
+                {/* ── COMPLETED — edit report + send to faculty ── */}
                 {apt.status === 'completed' && (
-                  <button onClick={() => handleOpenReport(apt)} className="mt-3 w-full flex items-center justify-center gap-1 bg-yellow-400 hover:bg-yellow-500 text-black font-bold py-1.5 rounded text-xs uppercase tracking-wide transition">
-                    <FileText className="w-3 h-3" /> {apt.narrativeSummary ? 'Edit Report' : 'Add Report'}
-                  </button>
+                  <div className="flex gap-2 mt-3">
+                    <button onClick={() => handleOpenReport(apt)} className="flex-1 flex items-center justify-center gap-1 bg-yellow-400 hover:bg-yellow-500 text-black font-bold py-1.5 rounded text-xs uppercase tracking-wide transition">
+                      <FileText className="w-3 h-3" /> {apt.narrativeSummary ? 'Edit Report' : 'Add Report'}
+                    </button>
+                    {/* ── NEW: Send to Faculty button ── */}
+                    <button onClick={() => handleOpenFacultyReport(apt)} className="flex items-center justify-center gap-1 bg-blue-50 hover:bg-blue-100 border border-blue-300 text-blue-700 font-bold py-1.5 px-3 rounded text-xs uppercase tracking-wide transition">
+                      <Send className="w-3 h-3" /> Faculty
+                    </button>
+                  </div>
                 )}
 
                 {/* ── RESCHEDULE_PROPOSED — waiting note ── */}
